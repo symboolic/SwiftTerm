@@ -139,6 +139,20 @@ struct ClipRect {
     let maxY: Float
 }
 
+/// The whole device pixels a pixel-snapped custom glyph covers, starting at
+/// `column` and spanning `columns` cells. Text, backgrounds and the cursor sit
+/// at `column * cellWidthPx`, which is fractional whenever the render scale is
+/// not the one the cell width was snapped to (`metalScaleFactorOverride`).
+/// Stepping by `round(cellWidthPx)` instead drifts by the rounding error on
+/// every column, so a table's borders walk away from its text. Rounding both
+/// edges keeps each glyph on the shared grid, and neighbouring glyphs meet
+/// with no gap or overlap.
+func customGlyphPixelSpan(column: Int, columns: Int, cellWidthPx: CGFloat) -> (x0: Int, width: Int) {
+    let x0 = Int((CGFloat(column) * cellWidthPx).rounded())
+    let x1 = Int((CGFloat(column + columns) * cellWidthPx).rounded())
+    return (x0, max(1, x1 - x0))
+}
+
 struct CustomGlyphKey: Hashable {
     let codePoint: UInt32
     let cellWidthPx: Int
@@ -975,7 +989,6 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         let lineOriginPx = CGPoint(x: lineOrigin.x * scale, y: lineOrigin.y * scale)
         let cellWidthPx = cellWidth * scale
         let cellHeightPx = cellHeight * scale
-        let baseCellWidthPx = max(1, Int(round(cellWidthPx)))
         let baseCellHeightPx = max(1, Int(round(cellHeightPx)))
         let clipRect: ClipRect? = {
             switch renderMode {
@@ -1010,7 +1023,9 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
             let antiAliasBlocks = terminalView.antiAliasCustomBlockGlyphs
 
             for item in lineInfo.boxDrawings {
-                let itemWidthPx = baseCellWidthPx * item.columnWidth
+                let span = customGlyphPixelSpan(column: item.column, columns: item.columnWidth,
+                                                cellWidthPx: cellWidthPx)
+                let itemWidthPx = span.width
                 guard let entry = customGlyphEntry(codePoint: item.codePoint,
                                                    cellWidthPx: itemWidthPx,
                                                    cellHeightPx: baseCellHeightPx,
@@ -1026,7 +1041,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
                 let v1 = Float(entry.region.y + entry.region.height) / atlasSize
                 let alignedOriginX = round(lineOriginPx.x)
                 let alignedOriginY = round(lineOriginPx.y)
-                let x0 = alignedOriginX + CGFloat(item.column * baseCellWidthPx)
+                let x0 = alignedOriginX + CGFloat(span.x0)
                 let y0 = alignedOriginY
                 let x1 = x0 + CGFloat(itemWidthPx)
                 let placementHeightPx = antiAliasBlocks ? cellHeightPx : CGFloat(baseCellHeightPx)
@@ -1051,7 +1066,8 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
                 if antiAliasBlocks {
                     itemWidthPx = max(1, Int(round(cellWidthPx * CGFloat(element.columnWidth))))
                 } else {
-                    itemWidthPx = baseCellWidthPx * element.columnWidth
+                    itemWidthPx = customGlyphPixelSpan(column: element.column, columns: element.columnWidth,
+                                                       cellWidthPx: cellWidthPx).width
                 }
                 guard let entry = customGlyphEntry(codePoint: element.codePoint,
                                                    cellWidthPx: itemWidthPx,
@@ -1074,7 +1090,9 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
                 } else {
                     let alignedOriginX = round(lineOriginPx.x)
                     let alignedOriginY = round(lineOriginPx.y)
-                    originX = alignedOriginX + CGFloat(element.column * baseCellWidthPx)
+                    originX = alignedOriginX + CGFloat(customGlyphPixelSpan(column: element.column,
+                                                                            columns: element.columnWidth,
+                                                                            cellWidthPx: cellWidthPx).x0)
                     originY = alignedOriginY
                 }
                 let x0 = originX
@@ -1098,7 +1116,9 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
             }
 
             for item in lineInfo.powerlineGlyphs {
-                let itemWidthPx = baseCellWidthPx * item.columnWidth
+                let span = customGlyphPixelSpan(column: item.column, columns: item.columnWidth,
+                                                cellWidthPx: cellWidthPx)
+                let itemWidthPx = span.width
                 guard let entry = customGlyphEntry(codePoint: item.codePoint,
                                                    cellWidthPx: itemWidthPx,
                                                    cellHeightPx: baseCellHeightPx,
@@ -1112,7 +1132,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
                 let v0 = Float(entry.region.y) / atlasSize
                 let u1 = Float(entry.region.x + entry.region.width) / atlasSize
                 let v1 = Float(entry.region.y + entry.region.height) / atlasSize
-                let alignedOriginX = round(lineOriginPx.x) + CGFloat(item.column * baseCellWidthPx)
+                let alignedOriginX = round(lineOriginPx.x) + CGFloat(span.x0)
                 let alignedOriginY = round(lineOriginPx.y)
                 let x0 = alignedOriginX
                 let y0 = alignedOriginY
